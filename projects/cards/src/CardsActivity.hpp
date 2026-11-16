@@ -725,6 +725,7 @@ private:
     std::string m_menuTitle;
     std::vector<MenuItem> m_menu;
     int m_menuSel = 0;
+    bool m_menuUsers = false;
     bool m_notifOpen = false;
     std::vector<std::pair<std::string, std::string>> m_notifRows; // title, detail
     std::string m_message;

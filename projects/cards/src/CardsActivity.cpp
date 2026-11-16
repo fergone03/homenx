@@ -407,6 +407,20 @@ size_t popupTop(size_t rows, int chosen) {
     return static_cast<size_t>(std::clamp(chosen - static_cast<int>(kPopupRows / 2), 0, static_cast<int>(rows - kPopupRows)));
 }
 
+void userPickerLayout(size_t count, nxui::Rect& box, float& cardW, float& cardH, float& gap, float& x0, float& cardY) {
+    const size_t n = std::clamp<size_t>(count, 1, 8);
+    gap = 18.f;
+    constexpr float kPadX = 28.f;
+    cardW = n <= 4 ? 156.f : std::max(110.f, (1080.f - kPadX * 2.f - gap * static_cast<float>(n - 1)) / static_cast<float>(n));
+    cardH = cardW + 46.f;
+    const float rowW = cardW * static_cast<float>(n) + gap * static_cast<float>(n - 1);
+    const float w = std::max(460.f, rowW + kPadX * 2.f);
+    const float h = cardH + 128.f;
+    box = {(1280.f - w) * 0.5f, (720.f - h) * 0.5f, w, h};
+    x0 = box.x + (box.width - rowW) * 0.5f;
+    cardY = box.y + 68.f;
+}
+
 // Quick Settings: the panel on the right and where its parts sit in it.
 constexpr float kQuickW = 460.f, kQuickH = 700.f, kQuickY = 10.f, kQuickPad = 18.f;
 constexpr float kQStatusY = 58.f, kQStatusH = 58.f, kQPlayerY = 126.f, kQPlayerH = 150.f;
@@ -2353,10 +2367,14 @@ void CardsActivity::launchGame(const Game& g) {
             app().gpu().waitIdle(); // the last popup's pictures may still be drawing
             m_userPictures.clear();
             std::vector<MenuItem> items;
-            for (const User& u : users) {
+            int activeIdx = 0;
+            const size_t shownUsers = std::min<size_t>(users.size(), 8);
+            for (size_t ui = 0; ui < shownUsers; ++ui) {
+                const User& u = users[ui];
+                if (u.uid.uid[0] == m_user.uid[0] && u.uid.uid[1] == m_user.uid[1]) activeIdx = static_cast<int>(ui);
                 auto tex = std::make_unique<nxui::Texture>();
                 const nxui::Texture* pic = nullptr;
-                if (!u.picture.empty() && tex->loadFromMemory(app().gpu(), app().renderer(), u.picture.data(), u.picture.size(), 96)) {
+                if (!u.picture.empty() && tex->loadFromMemory(app().gpu(), app().renderer(), u.picture.data(), u.picture.size(), 160)) {
                     pic = tex.get();
                     m_userPictures.push_back(std::move(tex));
                 }
@@ -2368,8 +2386,9 @@ void CardsActivity::launchGame(const Game& g) {
                 row.picture = pic;
                 items.push_back(std::move(row));
             }
-            items.push_back(action("Cancel", [] {}));
             openMenu(trf("Who's playing {game}?", {g.name}), std::move(items));
+            m_menuUsers = true;
+            m_menuSel = activeIdx;
             return;
         }
     }
@@ -2470,7 +2489,7 @@ void CardsActivity::openNro(const std::string& path) {
     leave(index, 0.85f, [this, path, host]() {
         m_discord.beginShutdown();
         // (The homebrew menu itself: the Loader puts the user's own back and starts that.)
-        if (!m_launcher.launchNro(path == "sdmc:/hbmenu.nro" ? std::string("hbmenu") : path, host, launchUid())) {
+        if (!m_launcher.launchNro(path == "sdmc:/hbmenu.nro" ? std::string("hbmenu") : path, host, launchUid(), /*applicationOnly=*/true)) {
             comeBack();
             const std::string why = AppletLauncher::loaderError();
             say(why.empty() ? std::string("That app didn't start.") : why);
@@ -3762,6 +3781,7 @@ void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     m_menuTitle = std::move(title);
     m_menu = std::move(items);
     m_menuSel = 0;
+    m_menuUsers = false;
     m_menuIn = m_settings.motion ? 0.f : 1.f;
     m_audio.play("show_modal");
 }
@@ -4824,10 +4844,8 @@ void CardsActivity::openDots() {
 #ifdef SWITCHU_MENU
     m_dotsTiles.push_back({"News", "news", nxui::Color(0.95f, 0.25f, 0.25f, 1.f), [this]() { openNews(); }});
 #endif
-    m_dotsTiles.push_back({"Discord", "discord", nxui::Color(0.35f, 0.40f, 0.95f, 1.f), [this]() { openDiscord(); }});
     m_dotsTiles.push_back({"Users", "friends", nxui::Color(1.f, 0.6f, 0.2f, 1.f), [this]() { openUsers(); }});
     m_dotsTiles.push_back({"Pages", "copy", nxui::Color(0.36f, 0.68f, 1.f, 1.f), [this]() { openPagePicker(); }});
-    m_dotsTiles.push_back({"Music", "music", nxui::Color(0.95f, 0.35f, 0.6f, 1.f), [this]() { openMusic(); }});
     m_dotsTiles.push_back({"Quick", "sun", nxui::Color(1.f, 0.78f, 0.25f, 1.f), [this]() { openQuick(); }});
     m_dotsTiles.push_back({"Updates", "sort", nxui::Color(0.25f, 0.8f, 0.5f, 1.f), [this]() { openHomebrewUpdates(); }});
     m_dotsTiles.push_back({"Settings", "gear", nxui::Color(0.55f, 0.6f, 0.68f, 1.f), [this]() { openSettings(); }});
@@ -7700,7 +7718,7 @@ void CardsActivity::activateTop(int index) {
     press(0, index);
     switch (index) {
         case kTopMenu: openDots(); break;
-        case kTopDiscord: openDiscord(); break;
+        case kTopDiscord: break;
         case kTopSort:
             if (m_page == kGames) {
                 int at = 0;
@@ -7719,7 +7737,7 @@ void CardsActivity::activateTop(int index) {
                                    : trf("{n} players online in Nextendo.", {std::to_string(m_playersTotal)}));
             break;
         case kTopBell: openNotifications(); break;
-        case kTopMusic: openMusic(); break;
+        case kTopMusic: break;
         case kTopPower: openPower(); break;
         case kTopGear: openSettings(); break;
         default: break;
@@ -7798,6 +7816,33 @@ void CardsActivity::keepTextCachesSmall() {
 
 bool CardsActivity::updatePopup() {
     if (m_menu.empty()) return false;
+    if (m_menuUsers) {
+        auto& in = app().input();
+        using B = nxui::Button;
+        const int n = static_cast<int>(m_menu.size());
+        m_menuSel = std::clamp(m_menuSel, 0, n - 1);
+        if ((in.isDown(B::DLeft) || in.isDown(B::LStickL)) && m_menuSel > 0) {
+            --m_menuSel;
+            m_audio.play("navigation");
+        }
+        if ((in.isDown(B::DRight) || in.isDown(B::LStickR)) && m_menuSel < n - 1) {
+            ++m_menuSel;
+            m_audio.play("navigation");
+        }
+        if (in.isDown(B::B)) {
+            m_audio.play("hide_modal");
+            m_menu.clear();
+            m_menuUsers = false;
+            return true;
+        }
+        if (in.isDown(B::A)) {
+            auto run = m_menu[static_cast<size_t>(m_menuSel)].run;
+            m_menu.clear();
+            m_menuUsers = false;
+            if (run) run();
+        }
+        return true;
+    }
     listInput(m_menu, m_menuSel, [this]() { m_menu.clear(); });
     return true;
 }
@@ -8016,6 +8061,30 @@ bool CardsActivity::handleTouch() {
     if (m_optOpen) return optionsTouch();
     if (!m_menu.empty()) {
         if (!in.touchUp()) return in.isTouching();
+        if (m_menuUsers) {
+            nxui::Rect box;
+            float cardW, cardH, gap, x0, cardY;
+            userPickerLayout(m_menu.size(), box, cardW, cardH, gap, x0, cardY);
+            if (!box.contains(x, y)) {
+                m_menu.clear();
+                m_menuUsers = false;
+                m_audio.play("hide_modal");
+                return true;
+            }
+            const size_t n = std::min<size_t>(m_menu.size(), 8);
+            for (size_t i = 0; i < n; ++i) {
+                const nxui::Rect card{x0 + static_cast<float>(i) * (cardW + gap), cardY, cardW, cardH};
+                if (card.contains(x, y)) {
+                    m_menuSel = static_cast<int>(i);
+                    auto run = m_menu[i].run;
+                    m_menu.clear();
+                    m_menuUsers = false;
+                    if (run) run();
+                    return true;
+                }
+            }
+            return true;
+        }
         nxui::Rect box;
         float rowH = 56.f;
         popupGeometry(m_menu.size(), box, rowH);
@@ -8086,12 +8155,10 @@ bool CardsActivity::handleTouch() {
     if (y < 95.f) { // the top bar
         int hit = -1;
         if (inCircle(kMenuX, kTopY, 40.f)) hit = kTopMenu;
-        else if (inCircle(kDiscordX, kTopY, 40.f)) hit = kTopDiscord;
         else if (inCircle(kSortX, kTopY, 40.f)) hit = kTopSort;
         else if (m_userHit.contains(x, y)) hit = kTopUser;
         else if (m_settings.players && m_playersHit.contains(x, y)) hit = kTopPlayers;
         else if (inCircle(kBellX, kTopY, 32.f)) hit = kTopBell;
-        else if (inCircle(kMusicX, kTopY, 40.f)) hit = kTopMusic;
         else if (inCircle(kPowerX, kTopY, 40.f)) hit = kTopPower;
         else if (inCircle(kGearX, kTopY, 40.f)) hit = kTopGear;
         if (hit >= 0) {
@@ -9101,11 +9168,14 @@ void CardsActivity::onUpdate(float dt) {
         if (m_zone == Zone::Cards) {
             select(sel() + move);
         } else if (m_zone == Zone::Top) {
+            auto skipTop = [this](int s) {
+                return s == kTopDiscord || s == kTopMusic || (s == kTopPlayers && !m_settings.players);
+            };
             int next = m_topSel;
             do next += move;
-            while (next == kTopPlayers && !m_settings.players);
+            while (skipTop(next));
             next = std::clamp(next, 0, kTopCount - 1);
-            if (next == kTopPlayers && !m_settings.players) next = m_topSel;
+            if (skipTop(next)) next = m_topSel;
             if (next != m_topSel) m_audio.play("navigation");
             m_topSel = next;
         } else {
@@ -9141,7 +9211,6 @@ void CardsActivity::onUpdate(float dt) {
     if (in.isDown(B::Plus)) openOptions();
     if (in.isDown(B::X)) askClose();
     if (in.isDown(B::Minus)) openNotifications();
-    if (in.isDown(B::L)) openDiscord();
     if (in.isDown(B::R)) openQuick();
     if (in.isDown(B::ZL)) switchPage(-1);
     if (in.isDown(B::ZR)) switchPage(1);
@@ -9372,11 +9441,6 @@ void CardsActivity::drawTopBar(nxui::Renderer& r, float a) {
         textMid(r, m_fBadge, n, b.x + (b.width - measured(m_fBadge, n).x) * 0.5f, b.y + b.height * 0.5f, kWhite.withAlpha(a));
     };
     glassCircle(r, kMenuX, y, kCircle, top && m_topSel == kTopMenu, "dots", 34.f, a, pressedOf(kTopMenu));
-    glassCircle(r, kDiscordX, y, kCircle, top && m_topSel == kTopDiscord, "discord", 40.f, a, pressedOf(kTopDiscord));
-#ifdef SWITCHU_MENU
-    const int dms = m_discord.started() ? m_discord.unreadDms() : 0;
-    if (dms > 0) badge(kDiscordX + 14.f, y - 40.f, dms);
-#endif
     glassCircle(r, kSortX, y, kCircle, top && m_topSel == kTopSort, "sort", 34.f, a, pressedOf(kTopSort));
 
     // The pill: you (and whether you're online), the time, battery, free space, Nextendo.
@@ -9456,13 +9520,6 @@ void CardsActivity::drawTopBar(nxui::Renderer& r, float a) {
     if (top && m_topSel == kTopBell)
         r.drawRoundedRectOutline({kBellX - 26.f, y - 26.f, 52.f, 52.f}, accent(ring * a), 26.f, 3.f);
     if (m_unread > 0) badge(kBellX + 6.f, y - 37.f, m_unread);
-    glassCircle(r, kMusicX, y, kCircle, top && m_topSel == kTopMusic, "music", 34.f, a, pressedOf(kTopMusic));
-    if (m_settings.music) { // playing: a little level meter under the note
-        for (int i = 0; i < 3; ++i) {
-            const float hgt = 3.f + 5.f * (0.5f + 0.5f * std::sin(m_decoTime * (5.f + i * 1.7f) + i));
-            r.drawRect({kMusicX - 8.f + i * 6.f, y + 25.f - hgt, 3.f, hgt}, kWhite.withAlpha(0.8f * a));
-        }
-    }
     glassCircle(r, kPowerX, y, kCircle, top && m_topSel == kTopPower, "power", 34.f, a, pressedOf(kTopPower));
     glassCircle(r, kGearX, y, kCircle, top && m_topSel == kTopGear, "gear", 36.f, a, pressedOf(kTopGear));
 }
@@ -10106,6 +10163,42 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
     }
     if (m_menu.empty()) return;
     r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.42f * a));
+    if (m_menuUsers) {
+        nxui::Rect base;
+        float cardW, cardH, gap, x0, cardY;
+        userPickerLayout(m_menu.size(), base, cardW, cardH, gap, x0, cardY);
+        const float z = 0.94f + 0.06f * a;
+        const nxui::Rect box = scaled(base, z);
+        r.drawRoundedRect({box.x - 4.f, box.y + 12.f, box.width + 8.f, box.height + 4.f}, nxui::Color(0.f, 0.f, 0.f, 0.3f * a), 32.f);
+        frost(r, box, 28.f, nxui::Color(0.10f, 0.11f, 0.15f, 0.85f * a));
+        r.drawRoundedRectOutline(box, nxui::Color(1.f, 1.f, 1.f, 0.14f * a), 28.f, 1.5f);
+        r.drawGradientRect({box.x + 2.f, box.y + 2.f, box.width - 4.f, 60.f}, nxui::Color(1.f, 1.f, 1.f, 0.06f * a),
+                           nxui::Color(1.f, 1.f, 1.f, 0.f));
+        r.drawText(fit(m_fLabel, m_menuTitle, box.width - 48.f), {box.x + 26.f, box.y + 22.f}, &m_fLabel, kWhite.withAlpha(a));
+        const size_t n = std::min<size_t>(m_menu.size(), 8);
+        for (size_t i = 0; i < n; ++i) {
+            const bool selected = static_cast<int>(i) == m_menuSel;
+            const nxui::Rect rawCard{x0 + static_cast<float>(i) * (cardW + gap), cardY, cardW, cardH};
+            const nxui::Rect card = scaled(rawCard, selected ? 1.04f * z : z);
+            r.drawRoundedRect(card, nxui::Color(1.f, 1.f, 1.f, (selected ? 0.14f : 0.06f) * a), 20.f);
+            r.drawRoundedRectOutline(card, selected ? accent(a) : nxui::Color(1.f, 1.f, 1.f, 0.12f * a), 20.f,
+                                     selected ? 3.5f : 1.5f);
+            const float pad = 14.f * z;
+            const float side = card.width - pad * 2.f;
+            const nxui::Rect pic{card.x + pad, card.y + pad, side, side};
+            if (m_menu[i].picture && m_menu[i].picture->valid())
+                r.drawTextureRounded(m_menu[i].picture, pic, side * 0.5f, kWhite.withAlpha(a));
+            else
+                r.drawCircle({pic.x + side * 0.5f, pic.y + side * 0.5f}, side * 0.5f, nxui::Color(1.f, 1.f, 1.f, 0.25f * a), 32);
+            const float labelCy = pic.y + pic.height + (card.y + card.height - (pic.y + pic.height)) * 0.5f;
+            const float ns = fitScale(m_fPill, m_menu[i].label, card.width - 14.f, 0.72f);
+            const std::string lbl = fit(m_fPill, m_menu[i].label, card.width - 14.f, ns);
+            textMid(r, m_fPill, lbl, card.x + (card.width - measured(m_fPill, lbl).x * ns) * 0.5f, labelCy,
+                    (selected ? kWhite : kMuted).withAlpha(a), ns);
+        }
+        drawHints(r, box.x + box.width - 24.f, box.y + box.height - 24.f, {{"A", "Play"}, {"B", "Cancel"}}, a);
+        return;
+    }
     nxui::Rect base;
     float rowH = 56.f;
     popupGeometry(m_menu.size(), base, rowH);
