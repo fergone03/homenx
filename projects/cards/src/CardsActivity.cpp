@@ -3053,6 +3053,8 @@ bool CardsActivity::closeEverything() {
     m_musicOpen = false;
     if (m_moving) finishMove(false);
     m_menu.clear();
+    m_menuUsers = false;
+    m_menuBack = nullptr;
     m_notifOpen = false;
     m_sheetOpen = false;
     m_quickOpen = false;
@@ -3782,8 +3784,69 @@ void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     m_menu = std::move(items);
     m_menuSel = 0;
     m_menuUsers = false;
+    m_menuBack = nullptr;
     m_menuIn = m_settings.motion ? 0.f : 1.f;
     m_audio.play("show_modal");
+}
+
+void CardsActivity::openEditGame(const Game& g) {
+    std::vector<MenuItem> items;
+    items.push_back(action("Rename", [this, g]() { renameCard(g); }));
+    items.back().glyph = "tag";
+    if (g.action.empty()) {
+        if (g.homebrew) { // a port looks like a game: a cover, as a game's card
+            const std::string key = g.path.empty() ? idText(g.id) : g.path;
+            const std::uint64_t id = g.id;
+            items.push_back(action(g.fullCard ? "Show as an icon" : "Show as a full card", [this, key, id]() {
+                auto& list = m_settings.fullCards;
+                const auto at = std::find(list.begin(), list.end(), key);
+                if (at != list.end()) list.erase(at);
+                else list.push_back(key);
+                m_settings.save();
+                applyNames();
+                forgetShown(id);
+                auto it = m_art.find(id);
+                if (it != m_art.end()) { // its card again, the other way
+                    it->second.cardAsked = false;
+                    app().gpu().waitIdle(); // it may still be drawing
+                    it->second.card.reset();
+                }
+                m_thumbs.erase(id);
+                wantArt();
+            }));
+            items.back().glyph = "copy";
+        }
+        items.push_back(action("Change media", [this, g]() { openEditMedia(g); }));
+        items.back().glyph = "sun";
+    }
+    openMenu(tr("Edit game"), std::move(items));
+    m_menuBack = [this]() { openOptions(); };
+}
+
+void CardsActivity::openEditMedia(const Game& g) {
+    const std::uint64_t id = g.id;
+    std::vector<MenuItem> items;
+    items.push_back(action("Card picture", [this, g]() { openTitlePicker(g, true); }));
+    items.back().glyph = "copy";
+    items.push_back(action("Title picture", [this, g]() { openTitlePicker(g); }));
+    items.back().glyph = "tag";
+    items.push_back(action("Background picture", [this, g]() { openTitlePicker(g, false, {}, true); }));
+    items.back().glyph = "sun";
+    items.push_back(action("Download new pictures", [this, id]() {
+        forgetArt(id);
+        auto it = m_art.find(id);
+        if (it != m_art.end()) {
+            it->second.cardAsked = it->second.bgAsked = false;
+            app().gpu().waitIdle(); // they may still be drawing
+            it->second.card.reset();
+            it->second.bg.reset();
+        }
+        m_thumbs.erase(id); // (the old one's small copy)
+        wantArt();
+    }));
+    items.back().glyph = "restart";
+    openMenu(tr("Change media"), std::move(items));
+    m_menuBack = [this, g]() { openEditGame(g); };
 }
 
 // Plus (and the panel's "..."): what can be done with the chosen card.
@@ -3809,7 +3872,7 @@ void CardsActivity::openOptions() {
     items.push_back(action("Move", [this]() { startMove(); }));
     items.back().glyph = "arrows";
     if (g.action != "get") {
-        items.push_back(action("Rename", [this, g]() { renameCard(g); }));
+        items.push_back(action("Edit game", [this, g]() { openEditGame(g); }));
         items.back().glyph = "tag";
     }
 #ifdef SWITCHU_MENU
@@ -3846,53 +3909,9 @@ void CardsActivity::openOptions() {
                 items.push_back(action(trf("Move to {page}", {pageName(to)}), [this, g, to]() { moveToPage(g, to); }));
                 items.back().glyph = to == kMedia ? "music" : to == kGames ? "play" : "dots";
             }
-    if (g.action.empty()) {
-        const std::uint64_t id = g.id;
-        items.push_back(action("Download new pictures", [this, id]() {
-            forgetArt(id);
-            auto it = m_art.find(id);
-            if (it != m_art.end()) {
-                it->second.cardAsked = it->second.bgAsked = false;
-                app().gpu().waitIdle(); // they may still be drawing
-                it->second.card.reset();
-                it->second.bg.reset();
-            }
-            m_thumbs.erase(id); // (the old one's small copy)
-            wantArt();
-        }));
-        items.back().glyph = "restart";
-        items.push_back(action("Card picture", [this, g]() { openTitlePicker(g, true); }));
-        items.back().glyph = "copy";
-        items.push_back(action("Background picture", [this, g]() { openTitlePicker(g, false, {}, true); }));
-        items.back().glyph = "sun";
-        if (g.homebrew) { // a port looks like a game: a cover, as a game's card
-            const std::string key = g.path.empty() ? idText(g.id) : g.path;
-            items.push_back(action(g.fullCard ? "Show as an icon" : "Show as a full card", [this, key, id]() {
-                auto& list = m_settings.fullCards;
-                const auto at = std::find(list.begin(), list.end(), key);
-                if (at != list.end()) list.erase(at);
-                else list.push_back(key);
-                m_settings.save();
-                applyNames();
-                forgetShown(id);
-                auto it = m_art.find(id);
-                if (it != m_art.end()) { // its card again, the other way
-                    it->second.cardAsked = false;
-                    app().gpu().waitIdle(); // it may still be drawing
-                    it->second.card.reset();
-                }
-                m_thumbs.erase(id);
-                wantArt();
-            }));
-            items.back().glyph = "copy";
-        }
-        // A game's, and homebrew's too (a port, an app, one moved to Games): chosen by hand for homebrew.
-        items.push_back(action("Title picture", [this, g]() { openTitlePicker(g); }));
-        items.back().glyph = "tag";
-        if (game) {
-            items.push_back(action("About this game", [this, g]() { openGameInfo(g); }));
-            items.back().glyph = "dots";
-        }
+    if (g.action.empty() && game) {
+        items.push_back(action("About this game", [this, g]() { openGameInfo(g); }));
+        items.back().glyph = "dots";
     }
     if (const NroUpdate* u = nroUpdate(g)) { // a newer version
         const std::string path = g.path;
@@ -7843,7 +7862,18 @@ bool CardsActivity::updatePopup() {
         }
         return true;
     }
-    listInput(m_menu, m_menuSel, [this]() { m_menu.clear(); });
+    if (m_menuBack && app().input().isDown(nxui::Button::B)) {
+        auto back = std::move(m_menuBack);
+        m_menu.clear();
+        m_menuBack = nullptr;
+        m_audio.play("hide_modal");
+        back();
+        return true;
+    }
+    listInput(m_menu, m_menuSel, [this]() {
+        m_menu.clear();
+        m_menuBack = nullptr;
+    });
     return true;
 }
 
@@ -8090,6 +8120,7 @@ bool CardsActivity::handleTouch() {
         popupGeometry(m_menu.size(), box, rowH);
         if (!box.contains(x, y)) {
             m_menu.clear();
+            m_menuBack = nullptr;
             m_audio.play("hide_modal");
             return true;
         }
@@ -8102,7 +8133,10 @@ bool CardsActivity::handleTouch() {
         const nxui::Rect r{box.x + 14.f, box.y + 66.f + rowH * static_cast<float>(shownRow), box.width - 28.f, rowH - 6.f};
         if (tapRow(item, r, r.x + r.width - 18.f - 150.f, 150.f) && item.run) {
             auto run = item.run;
-            if (!item.stay) m_menu.clear();
+            if (!item.stay) {
+                m_menu.clear();
+                m_menuBack = nullptr;
+            }
             run();
         }
         return true;

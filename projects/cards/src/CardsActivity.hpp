@@ -341,6 +341,8 @@ private:
     // Popups and screens.
     void openMenu(std::string title, std::vector<MenuItem> items);
     void openOptions();
+    void openEditGame(const Game& g);
+    void openEditMedia(const Game& g);
     // The Music screen (the note in the bar, Music on the dots): a record that
     // turns, the song and its controls, the playlist, and the music's bars.
     bool m_musicOpen = false;
@@ -726,6 +728,7 @@ private:
     std::vector<MenuItem> m_menu;
     int m_menuSel = 0;
     bool m_menuUsers = false;
+    std::function<void()> m_menuBack;
     bool m_notifOpen = false;
     std::vector<std::pair<std::string, std::string>> m_notifRows; // title, detail
     std::string m_message;
