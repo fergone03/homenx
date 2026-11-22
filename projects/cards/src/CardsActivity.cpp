@@ -4863,8 +4863,10 @@ void CardsActivity::openDots() {
 #ifdef SWITCHU_MENU
     m_dotsTiles.push_back({"News", "news", nxui::Color(0.95f, 0.25f, 0.25f, 1.f), [this]() { openNews(); }});
 #endif
+    m_dotsTiles.push_back({"Discord", "discord", nxui::Color(0.35f, 0.40f, 0.95f, 1.f), [this]() { openDiscord(); }});
     m_dotsTiles.push_back({"Users", "friends", nxui::Color(1.f, 0.6f, 0.2f, 1.f), [this]() { openUsers(); }});
     m_dotsTiles.push_back({"Pages", "copy", nxui::Color(0.36f, 0.68f, 1.f, 1.f), [this]() { openPagePicker(); }});
+    m_dotsTiles.push_back({"Music", "music", nxui::Color(0.95f, 0.35f, 0.6f, 1.f), [this]() { openMusic(); }});
     m_dotsTiles.push_back({"Quick", "sun", nxui::Color(1.f, 0.78f, 0.25f, 1.f), [this]() { openQuick(); }});
     m_dotsTiles.push_back({"Updates", "sort", nxui::Color(0.25f, 0.8f, 0.5f, 1.f), [this]() { openHomebrewUpdates(); }});
     m_dotsTiles.push_back({"Settings", "gear", nxui::Color(0.55f, 0.6f, 0.68f, 1.f), [this]() { openSettings(); }});
@@ -7737,7 +7739,7 @@ void CardsActivity::activateTop(int index) {
     press(0, index);
     switch (index) {
         case kTopMenu: openDots(); break;
-        case kTopDiscord: break;
+        case kTopDiscord: openDiscord(); break;
         case kTopSort:
             if (m_page == kGames) {
                 int at = 0;
@@ -7756,7 +7758,7 @@ void CardsActivity::activateTop(int index) {
                                    : trf("{n} players online in Nextendo.", {std::to_string(m_playersTotal)}));
             break;
         case kTopBell: openNotifications(); break;
-        case kTopMusic: break;
+        case kTopMusic: openMusic(); break;
         case kTopPower: openPower(); break;
         case kTopGear: openSettings(); break;
         default: break;
@@ -8189,10 +8191,12 @@ bool CardsActivity::handleTouch() {
     if (y < 95.f) { // the top bar
         int hit = -1;
         if (inCircle(kMenuX, kTopY, 40.f)) hit = kTopMenu;
+        else if (inCircle(kDiscordX, kTopY, 40.f)) hit = kTopDiscord;
         else if (inCircle(kSortX, kTopY, 40.f)) hit = kTopSort;
         else if (m_userHit.contains(x, y)) hit = kTopUser;
         else if (m_settings.players && m_playersHit.contains(x, y)) hit = kTopPlayers;
         else if (inCircle(kBellX, kTopY, 32.f)) hit = kTopBell;
+        else if (inCircle(kMusicX, kTopY, 40.f)) hit = kTopMusic;
         else if (inCircle(kPowerX, kTopY, 40.f)) hit = kTopPower;
         else if (inCircle(kGearX, kTopY, 40.f)) hit = kTopGear;
         if (hit >= 0) {
@@ -9202,14 +9206,11 @@ void CardsActivity::onUpdate(float dt) {
         if (m_zone == Zone::Cards) {
             select(sel() + move);
         } else if (m_zone == Zone::Top) {
-            auto skipTop = [this](int s) {
-                return s == kTopDiscord || s == kTopMusic || (s == kTopPlayers && !m_settings.players);
-            };
             int next = m_topSel;
             do next += move;
-            while (skipTop(next));
+            while (next == kTopPlayers && !m_settings.players);
             next = std::clamp(next, 0, kTopCount - 1);
-            if (skipTop(next)) next = m_topSel;
+            if (next == kTopPlayers && !m_settings.players) next = m_topSel;
             if (next != m_topSel) m_audio.play("navigation");
             m_topSel = next;
         } else {
@@ -9245,6 +9246,7 @@ void CardsActivity::onUpdate(float dt) {
     if (in.isDown(B::Plus)) openOptions();
     if (in.isDown(B::X)) askClose();
     if (in.isDown(B::Minus)) openNotifications();
+    if (in.isDown(B::L)) openDiscord();
     if (in.isDown(B::R)) openQuick();
     if (in.isDown(B::ZL)) switchPage(-1);
     if (in.isDown(B::ZR)) switchPage(1);
@@ -9475,6 +9477,11 @@ void CardsActivity::drawTopBar(nxui::Renderer& r, float a) {
         textMid(r, m_fBadge, n, b.x + (b.width - measured(m_fBadge, n).x) * 0.5f, b.y + b.height * 0.5f, kWhite.withAlpha(a));
     };
     glassCircle(r, kMenuX, y, kCircle, top && m_topSel == kTopMenu, "dots", 34.f, a, pressedOf(kTopMenu));
+    glassCircle(r, kDiscordX, y, kCircle, top && m_topSel == kTopDiscord, "discord", 40.f, a, pressedOf(kTopDiscord));
+#ifdef SWITCHU_MENU
+    const int dms = m_discord.started() ? m_discord.unreadDms() : 0;
+    if (dms > 0) badge(kDiscordX + 14.f, y - 40.f, dms);
+#endif
     glassCircle(r, kSortX, y, kCircle, top && m_topSel == kTopSort, "sort", 34.f, a, pressedOf(kTopSort));
 
     // The pill: you (and whether you're online), the time, battery, free space, Nextendo.
@@ -9554,6 +9561,13 @@ void CardsActivity::drawTopBar(nxui::Renderer& r, float a) {
     if (top && m_topSel == kTopBell)
         r.drawRoundedRectOutline({kBellX - 26.f, y - 26.f, 52.f, 52.f}, accent(ring * a), 26.f, 3.f);
     if (m_unread > 0) badge(kBellX + 6.f, y - 37.f, m_unread);
+    glassCircle(r, kMusicX, y, kCircle, top && m_topSel == kTopMusic, "music", 34.f, a, pressedOf(kTopMusic));
+    if (m_settings.music) { // playing: a little level meter under the note
+        for (int i = 0; i < 3; ++i) {
+            const float hgt = 3.f + 5.f * (0.5f + 0.5f * std::sin(m_decoTime * (5.f + i * 1.7f) + i));
+            r.drawRect({kMusicX - 8.f + i * 6.f, y + 25.f - hgt, 3.f, hgt}, kWhite.withAlpha(0.8f * a));
+        }
+    }
     glassCircle(r, kPowerX, y, kCircle, top && m_topSel == kTopPower, "power", 34.f, a, pressedOf(kTopPower));
     glassCircle(r, kGearX, y, kCircle, top && m_topSel == kTopGear, "gear", 36.f, a, pressedOf(kTopGear));
 }
