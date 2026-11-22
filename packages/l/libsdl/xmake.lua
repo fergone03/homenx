@@ -18,7 +18,14 @@ package("libsdl")
         os.mkdir(root)
         if not os.isfile(package_path) then
             cprint("${color.build.target}downloading${clear} SDL2 audout")
-            os.execv("curl", {"-fL", package_url, "-o", package_path})
+            local mirror_url = "https://github.com/fergone03/homenx/releases/download/beta/" .. package_name
+            local ok = try { function()
+                os.execv("curl", {"-fL", "--retry", "3", "--connect-timeout", "15", mirror_url, "-o", package_path})
+                return true
+            end }
+            if not ok then
+                os.execv("curl", {"-fL", "--retry", "5", "--retry-delay", "3", "--retry-all-errors", package_url, "-o", package_path})
+            end
         end
         if hash.sha256(package_path) ~= package_sha256 then
             raise("unexpected checksum for " .. package_name)
